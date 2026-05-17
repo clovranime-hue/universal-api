@@ -6,7 +6,7 @@ pydantic>=2.0.0
 pydantic-settings>=2.0.0
 
 # Media Downloaders
-yt-dlp>=2024.1.1
+yt-dlp>=2024.11.0  # Latest version with Shorts support
 instaloader>=4.10.0
 pinterest-dl>=0.0.3
 playwright>=1.40.0  # For SSSInstagram automation
