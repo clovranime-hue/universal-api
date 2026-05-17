@@ -19,7 +19,7 @@ class YouTubeDownloader(BaseDownloader):
         self.executor = ThreadPoolExecutor(max_workers=3)
     
     def _get_ydl_options(self, format: str = "best") -> Dict:
-        """Get yt-dlp options optimized for YouTube & Shorts"""
+        """Get yt-dlp options optimized for YouTube & Shorts with anti-bot measures"""
         return {
             'format': format,
             'quiet': True,
@@ -27,16 +27,20 @@ class YouTubeDownloader(BaseDownloader):
             'extract_flat': False,
             'socket_timeout': self.timeout,
             'retries': 3,
-            'noprogress': True,
             'nocheckcertificate': True,
-            # YouTube-specific options for better compatibility
+            'noprogress': True,
+            # Anti-bot measures
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['web', 'ios', 'android'],  # Multiple clients
+                    'player_client': ['web', 'ios', 'android', 'tv'],  # Multiple clients for better success
+                    'player_skip': ['webpage'],
+                    'no_live_chat': True,
                 }
             },
             # Better error handling
             'ignoreerrors': False,
+            # Additional options to bypass restrictions
+            'default_search': 'auto',
         }
     
     def _create_media_item(self, url: str, quality: str = "best", format: str = "mp4", 
