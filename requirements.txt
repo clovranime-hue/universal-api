@@ -1,0 +1,20 @@
+# FastAPI & Server
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.6
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+
+# Media Downloaders
+yt-dlp>=2024.1.1
+instaloader>=4.10.0
+pinterest-dl>=0.0.3
+playwright>=1.40.0  # For SSSInstagram automation
+
+# Utilities
+httpx==0.26.0
+aiofiles==23.2.1
+python-dotenv==1.0.0
+
+# Optional: For better Instagram support
+# instagrapi==2.1.3
