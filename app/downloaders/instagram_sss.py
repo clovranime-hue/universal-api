@@ -152,28 +152,35 @@ class SSSInstagramDownloader(BaseDownloader):
                 except Exception:
                     continue
             
-            # Wait for results
-            await page.wait_for_timeout(3000)
+            # Wait for results - extended wait time
+            await page.wait_for_timeout(5000)
             
             # Look for video URL in the page
             # SSSInstagram typically shows download links after processing
             page_content = await page.content()
             
-            # Extract video URLs from the page
+            # Extract video URLs from the page - Updated patterns
             video_patterns = [
-                r'(https://[^\s"\'<>]+\.mp4[^\s"\'<>]*)',
-                r'(https://[^\s"\'<>]+cdninstagram\.com[^\s"\'<>]+)',
-                r'(https://[^\s"\'<>]+fbcdn\.net[^\s"\'<>]+)',
+                # Direct MP4 URLs
+                r'"(https://[^"\s]+\.mp4[^"]*)"',
+                # Instagram CDN URLs
+                r'(https://[a-zA-Z0-9.-]+cdninstagram\.com[^\s"\'<>()]+)',
+                # Facebook CDN URLs
+                r'(https://[a-zA-Z0-9.-]+fbcdn\.net[^\s"\'<>()]+)',
+                # Data-href attributes
+                r'data-href="([^"]+\.mp4[^"]+)"',
+                # href in download links
+                r'href="(https://[^"]+\.mp4[^"]+)"',
             ]
             
             video_url = None
             for pattern in video_patterns:
-                matches = re.findall(pattern, page_content)
+                matches = re.findall(pattern, page_content, re.IGNORECASE)
                 if matches:
                     # Filter for Instagram CDN URLs
                     for match in matches:
-                        clean_url = match.replace('\\/', '/')
-                        if any(x in clean_url for x in ['instagram.com', 'cdninstagram.com', 'fbcdn.net']):
+                        clean_url = match.replace('\\/', '/').replace('&amp;', '&')
+                        if any(x in clean_url for x in ['instagram.com', 'cdninstagram.com', 'fbcdn.net', 'scontent']):
                             video_url = clean_url
                             break
                     if video_url:
@@ -202,23 +209,65 @@ class SSSInstagramDownloader(BaseDownloader):
                 }
             
             # Try to find download button link
-            download_links = await page.query_selector_all('a[href*=".mp4"]')
+            download_links = await page.query_selector_all('a[href*=".mp4"], a[href*="cdninstagram.com"], a[href*="fbcdn.net"]')
             if download_links:
                 href = await download_links[0].get_attribute('href')
                 if href:
                     return {
-                        'video_url': href,
+                        'video_url': href.replace('\\/', '/').replace('&amp;', '&'),
                         'thumbnail': None,
                         'title': None,
                         'type': 'video'
                     }
             
+            # Try to find video in download buttons with data attributes
+            video_buttons = await page.query_selector_all('button[data-url*="mp4"], a[data-href*="mp4"]')
+            if video_buttons:
+                for btn in video_buttons:
+                    data_url = await btn.get_attribute('data-url') or await btn.get_attribute('data-href')
+                    if data_url and 'mp4' in data_url:
+                        return {
+                            'video_url': data_url.replace('\\/', '/').replace('&amp;', '&'),
+                            'thumbnail': None,
+                            'title': None,
+                            'type': 'video'
+                        }
+            
+            # Try to find video in JSON data embedded in page
+            json_matches = re.findall(r'"video_versions":\s*\[([^\]]+)\]', page_content)
+            if json_matches:
+                for match in json_matches:
+                    # Extract URL from JSON
+                    url_match = re.search(r'"url":\s*"([^"]+)"', match)
+                    if url_match:
+                        video_url = url_match.group(1).replace('\\/', '/')
+                        if any(x in video_url for x in ['instagram.com', 'cdninstagram.com', 'scontent']):
+                            return {
+                                'video_url': video_url,
+                                'thumbnail': None,
+                                'title': None,
+                                'type': 'video'
+                            }
+            
+            # Try to find video in meta tags
+            video_meta = re.search(r'<meta property="og:video" content="([^"]+)"', page_content)
+            if video_meta:
+                video_url = video_meta.group(1).replace('\\/', '/')
+                return {
+                    'video_url': video_url,
+                    'thumbnail': None,
+                    'title': None,
+                    'type': 'video'
+                }
+            
             return None
             
         except Exception as e:
+            print(f"SSSInstagram error: {e}")
             return None
         finally:
-            await page.close()
+            if page:
+                await page.close()
     
     async def _download_via_direct(self, url: str) -> Optional[Dict]:
         """
@@ -231,22 +280,48 @@ class SSSInstagramDownloader(BaseDownloader):
         if not shortcode:
             return None
         
-        try:
-            embed_url = f"https://www.instagram.com/reel/{shortcode}/embed/"
-            
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                headers = {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                }
-                
-                response = await client.get(embed_url, headers=headers, follow_redirects=True)
-                
-                if response.status_code == 200:
-                    html = response.text
+        # Try multiple endpoints for better success rate
+        endpoints = [
+            f"https://www.instagram.com/reel/{shortcode}/",
+            f"https://www.instagram.com/p/{shortcode}/",
+            f"https://www.instagram.com/reel/{shortcode}/embed/",
+        ]
+        
+        for embed_url in endpoints:
+            try:
+                async with httpx.AsyncClient(timeout=self.timeout) as client:
+                    headers = {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                        'Accept-Language': 'en-US,en;q=0.5',
+                    }
                     
-                    # Look for video URL
-                    video_match = re.search(r'"video_url":"([^"]+)"', html)
+                    response = await client.get(embed_url, headers=headers, follow_redirects=True)
+                    
+                    if response.status_code == 200:
+                        html = response.text
+                        
+                        # Look for video URL in various formats
+                        video_patterns = [
+                            r'"video_url":"([^"]+)"',
+                            r'"video_versions":\[\{\s*"url":"([^"]+)"',
+                            r'"dash_url":"([^"]+)"',
+                        ]
+                        
+                        for pattern in video_patterns:
+                            match = re.search(pattern, html)
+                            if match:
+                                video_url = match.group(1).replace('\\/', '/')
+                                return {
+                                    'video_url': video_url,
+                                    'thumbnail': None,
+                                    'title': None,
+                                    'type': 'video'
+                                }
+            except Exception:
+                continue
+        
+        return None
                     if video_match:
                         video_url = video_match.group(1).replace('\\/', '/').replace('\\u002F', '/')
                         
